@@ -422,15 +422,28 @@ async function api(action, extra) {
   if (!API_URL || API_URL.indexOf('PASTE_') === 0) {
     throw new Error('Add your Apps Script web app URL to API_URL near the bottom of index.html.');
   }
+  const payload = Object.assign({ action, passcode: S.pass }, extra || {});
+  const params = new URLSearchParams();
+  Object.keys(payload).forEach(k => {
+    const v = payload[k];
+    if (v == null) return;
+    params.set(k, typeof v === 'object' ? JSON.stringify(v) : String(v));
+  });
   let res;
   try {
-    res = await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(Object.assign({ action, passcode: S.pass }, extra || {}))
-    });
-  } catch (e) {
-    throw new Error('Couldn’t reach the Google Sheet. Check your connection and the web app URL.');
+    // GET is the same request type you tested in the browser, so try it first.
+    res = await fetch(API_URL + '?' + params.toString(), { method: 'GET', redirect: 'follow', cache: 'no-store' });
+  } catch (e1) {
+    try {
+      res = await fetch(API_URL, {
+        method: 'POST',
+        redirect: 'follow',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+      });
+    } catch (e2) {
+      throw new Error('Couldn’t reach the Google Sheet (' + (e2.message || e1.message) + '). Check your connection and the web app URL.');
+    }
   }
   let data;
   try { data = await res.json(); } catch (e) {
