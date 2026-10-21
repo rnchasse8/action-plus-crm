@@ -319,7 +319,7 @@ dl.research dd { margin: 2px 0 0; overflow-wrap: anywhere; }
 /* =========================================================
    Paste your Apps Script web app URL here (ends in /exec)
    ========================================================= */
-const API_URL = 'PASTE_YOUR_WEB_APP_URL_HERE';
+const API_URL = 'https://script.google.com/macros/s/AKfycbz6i_ku89j3jtmBCDel4ASfb9U8UvWCcPKSVzyQL2LYMbaT0P-m7sHH1TsLLqJVXZJJ/exec';
 
 /* Column names, matching the Google Sheet headers */
 const F = {
@@ -420,7 +420,7 @@ function toast(msg, bad) {
 /* ---------- API ---------- */
 async function api(action, extra) {
   if (!API_URL || API_URL.indexOf('PASTE_') === 0) {
-    throw new Error(const API_URL = 'https://script.google.com/macros/s/AKfycbz6i_ku89j3jtmBCDel4ASfb9U8UvWCcPKSVzyQL2LYMbaT0P-m7sHH1TsLLqJVXZJJ/exec';);
+    throw new Error('Add your Apps Script web app URL to API_URL near the bottom of index.html.');
   }
   let res;
   try {
