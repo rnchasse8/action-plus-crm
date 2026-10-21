@@ -248,6 +248,21 @@ dl.research dd { margin: 2px 0 0; overflow-wrap: anywhere; }
 }
 .p-foot .status { margin-right: auto; font-size: 14px; color: var(--muted); }
 
+/* ---------- Activity + guide ---------- */
+.activity-list { list-style: none; margin: 0 0 14px; padding: 0; }
+.activity-list li { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.activity-list li:last-child { border-bottom: 0; }
+.activity-list .when { font-weight: 600; }
+.activity-list .line { font-size: 14px; overflow-wrap: anywhere; }
+.activity-list .line span { color: var(--muted); }
+.log-box { background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 14px 14px 4px; }
+.log-box .fld input, .log-box .fld select, .log-box .fld textarea { background: var(--surface); }
+.log-actions { display: flex; justify-content: flex-end; margin: 0 0 10px; }
+.guide ol { padding-left: 1.3em; margin: 0 0 8px; }
+.guide ol li { margin-bottom: 10px; }
+.guide ol li b { display: block; }
+.guide p { margin: 0 0 12px; max-width: 70ch; }
+
 /* ---------- Toast ---------- */
 .toast {
   position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); transform: translate(-50%, 20px);
@@ -271,6 +286,7 @@ dl.research dd { margin: 2px 0 0; overflow-wrap: anywhere; }
   </div>
   <div class="top-actions" id="topActions" hidden>
     <span class="sync-note" id="syncNote"></span>
+    <button class="btn" id="guideBtn" type="button">How it works</button>
     <button class="btn" id="refreshBtn" type="button">Refresh</button>
     <button class="btn" id="signOutBtn" type="button">Sign out</button>
   </div>
@@ -304,6 +320,7 @@ dl.research dd { margin: 2px 0 0; overflow-wrap: anywhere; }
     <select id="fPotential" aria-label="Partnership potential"></select>
     <button class="linkish" id="clearBtn" type="button" hidden>Clear filters</button>
     <span class="showing" id="showing"></span>
+    <button class="btn btn-primary" id="addBtn" type="button">Add organization</button>
   </section>
 
   <section class="list">
@@ -340,7 +357,9 @@ const RF = {
 const RESEARCH_ORDER = [RF.category, RF.ages, RF.address, RF.city, RF.web, RF.comp, RF.rationale,
   RF.potential, RF.approach, RF.notes, RF.parent, RF.email, RF.phone, RF.cstatus, RF.evidence,
   RF.checked, RF.source, RF.source2];
-const RESEARCH_SKIP = ['Org ID', RF.name];
+// Research repeats some Outreach columns with older values; Outreach is the working record.
+const RESEARCH_SKIP = ['Org ID', RF.name, 'Owner', 'Outreach stage', 'Last contact', 'Next action',
+  'Follow-up due', 'Follow-up status', 'Public contact', RF.email, RF.phone];
 
 const PASS_KEY = 'aplusCrmPasscode';
 
@@ -348,7 +367,8 @@ const S = {
   pass: '', rows: [], options: {}, editable: [], stages: [], loadedAt: 0,
   f: { q: '', stage: '', category: '', city: '', potential: '', view: '' },
   sort: { key: 'follow', dir: 1 },
-  openId: null, draft: {}, touchedDone: false, saving: false, hints: {}
+  openId: null, draft: {}, touchedDone: false, saving: false, hints: {},
+  mode: '', activity: null, logging: false
 };
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -405,7 +425,8 @@ const VIEWS = {
   due: { label: 'Due in the next 7 days', test: dueSoon },
   done: { label: 'Completed next actions', test: r => truthy(O(r, F.done)) },
   customers: { label: 'Confirmed Action+ customers', test: isCustomer, tone: 'good' },
-  roster: { label: 'Customers awaiting roster', test: awaitingRoster }
+  roster: { label: 'Customers awaiting roster', test: awaitingRoster },
+  competitors: { label: 'Competitors', test: r => /direct|indirect/i.test(R(r, RF.comp)) }
 };
 
 function toast(msg, bad) {
@@ -475,16 +496,20 @@ async function api(action, extra) {
 
 /* ---------- Loading ---------- */
 async function load(quiet) {
-  const data = await api('list');
+  applyData(await api('list'));
+  $('#syncNote').textContent = 'Synced ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (quiet) toast('List refreshed');
+}
+
+function applyData(data) {
   S.rows = data.rows || [];
   S.options = data.options || {};
   S.editable = data.editable || [];
+  S.activity = data.activity || null;
   S.loadedAt = Date.now();
   buildStages();
   buildFilters();
   renderAll();
-  $('#syncNote').textContent = 'Synced ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  if (quiet) toast('List refreshed');
 }
 
 function buildStages() {
@@ -627,8 +652,9 @@ function renderAll() {
   renderBoard();
   renderCounters();
   renderList();
-  if (S.openId) renderPanel();
+  if (S.openId || S.mode === 'guide') renderPanel();
 }
+
 
 /* ---------- Detail panel ---------- */
 const cur = () => S.rows.find(r => r.orgId === S.openId);
@@ -668,7 +694,7 @@ function field(r, k, kind) {
 
 function researchList(r) {
   const keys = Object.keys(r.research || {});
-  const ordered = RESEARCH_ORDER.filter(k => keys.includes(k)).concat(keys.filter(k => !RESEARCH_ORDER.includes(k) && !RESEARCH_SKIP.includes(k)));
+  const ordered = RESEARCH_ORDER.filter(k => keys.includes(k) && !RESEARCH_SKIP.includes(k)).concat(keys.filter(k => !RESEARCH_ORDER.includes(k) && !RESEARCH_SKIP.includes(k)));
   const items = ordered.map(k => {
     let v = R(r, k);
     if (v === '' || v == null) return '';
@@ -681,6 +707,7 @@ function researchList(r) {
 }
 
 function renderPanel() {
+  if (S.mode === 'guide') return renderGuide();
   const r = cur();
   const p = $('#panel');
   if (!r) { closePanel(true); return; }
@@ -725,6 +752,7 @@ function renderPanel() {
       '<h3>Contact</h3>' +
       field(r, F.contact) +
       '<div class="grid2">' + field(r, F.email, 'email') + field(r, F.phone, 'tel') + '</div>' +
+      activityHtml(r) +
       '<h3>Research</h3>' +
       researchList(r) +
     '</div>' +
@@ -734,9 +762,279 @@ function renderPanel() {
     '</div>';
 }
 
+/* ---------- Activity log ---------- */
+function activityCols() {
+  const A = S.activity;
+  const orgCol = A.headers.find(x => /org\s*id/i.test(x));
+  const nameCol = A.headers.find(x => x !== orgCol && /organi[sz]ation|program|team/i.test(x));
+  const dateCol = A.headers.find(x => /date|when/i.test(x));
+  return { orgCol, nameCol, dateCol };
+}
+
+function activityFor(r) {
+  const { orgCol, nameCol, dateCol } = activityCols();
+  const name = String(O(r, F.org)).trim();
+  const list = S.activity.rows.filter(x => {
+    const id = orgCol ? String(x[orgCol] || '').trim() : '';
+    if (id) return id === r.orgId;
+    return !!nameCol && String(x[nameCol] || '').trim() === name;
+  });
+  if (dateCol) list.sort((a, b) => String(b[dateCol] || '').localeCompare(String(a[dateCol] || '')));
+  return list;
+}
+
+function activityHtml(r) {
+  if (!S.activity || !S.activity.headers.length) return '';
+  const A = S.activity;
+  const { orgCol, nameCol, dateCol } = activityCols();
+  const past = activityFor(r);
+
+  const history = past.length
+    ? '<ul class="activity-list">' + past.map(x => {
+        const when = dateCol && x[dateCol] ? fmtDate(x[dateCol]) : '';
+        const lines = A.headers.filter(k => k !== orgCol && k !== nameCol && k !== dateCol && x[k] !== '' && x[k] !== false && x[k] != null)
+          .map(k => '<div class="line"><span>' + esc(k) + ':</span> ' + linkify(x[k] === true ? 'Yes' : x[k]) + '</div>').join('');
+        return '<li>' + (when ? '<div class="when">' + esc(when) + '</div>' : '') + lines + '</li>';
+      }).join('') + '</ul>'
+    : '<p class="sub">No activity logged yet.</p>';
+
+  const fields = A.headers.filter(k => k !== orgCol && k !== nameCol).map(k => {
+    const id = 'a_' + k.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+    const opts = A.options[k];
+    let def = '';
+    if (k === dateCol) def = today();
+    else if (/owner|logged by|^by$|who/i.test(k)) def = O(r, F.owner);
+    if (opts && opts.length) {
+      return '<div class="fld"><label for="' + id + '">' + esc(k) + '</label><select id="' + id + '" data-a="' + esc(k) + '">' +
+        '<option value=""></option>' + opts.map(o => '<option' + (o === def ? ' selected' : '') + '>' + esc(o) + '</option>').join('') + '</select></div>';
+    }
+    if (k === dateCol || /date/i.test(k)) {
+      return '<div class="fld"><label for="' + id + '">' + esc(k) + '</label><input type="date" id="' + id + '" data-a="' + esc(k) + '" value="' + esc(def) + '"></div>';
+    }
+    if (/note|summary|detail|outcome|description|result/i.test(k)) {
+      return '<div class="fld"><label for="' + id + '">' + esc(k) + '</label><textarea id="' + id + '" data-a="' + esc(k) + '" rows="2"></textarea></div>';
+    }
+    return '<div class="fld"><label for="' + id + '">' + esc(k) + '</label><input type="text" id="' + id + '" data-a="' + esc(k) + '" value="' + esc(def) + '"></div>';
+  }).join('');
+
+  return '<h3>Activity</h3>' + history +
+    '<div class="log-box">' + fields +
+    '<div class="log-actions"><button class="btn btn-primary" type="button" data-log' + (S.logging ? ' disabled' : '') + '>' +
+    (S.logging ? 'Logging…' : 'Log activity') + '</button></div></div>';
+}
+
+async function logActivity() {
+  const r = cur();
+  if (!r || S.logging) return;
+  const { orgCol, nameCol, dateCol } = activityCols();
+  const entry = {};
+  let filled = 0;
+  document.querySelectorAll('#panel [data-a]').forEach(el => {
+    const k = el.getAttribute('data-a');
+    const v = el.value.trim();
+    if (!v) return;
+    entry[k] = v;
+    if (k !== dateCol && !/owner|logged by|^by$|who/i.test(k)) filled++;
+  });
+  if (!filled) return toast('Describe the activity before logging it.', true);
+  if (orgCol) entry[orgCol] = r.orgId;
+  if (nameCol) entry[nameCol] = O(r, F.org);
+  S.logging = true; renderPanel();
+  try {
+    const res = await api('log', { changes: entry });
+    S.activity.rows.push(res.entry);
+    S.logging = false;
+    renderPanel();
+    toast('Activity logged. Update the stage or next action if they changed.');
+  } catch (err) {
+    S.logging = false; renderPanel();
+    if (err.code === 'auth') return signOut('The passcode changed. Enter the new one.');
+    toast(err.message, true);
+  }
+}
+
+/* ---------- Add organization ---------- */
+function mostCommon(values, fallback) {
+  const counts = {};
+  values.forEach(v => { v = String(v || '').trim(); if (v) counts[v] = (counts[v] || 0) + 1; });
+  const best = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+  return best || fallback || '';
+}
+
+function addDefaults() {
+  const stages = S.options[F.stage] || S.stages;
+  const handoffs = S.options[F.handoff] || [];
+  return {
+    stage: stages.find(s => /not contacted/i.test(s)) || stages[0] || 'Not contacted',
+    owner: mostCommon(S.rows.map(r => O(r, F.owner))),
+    next: mostCommon(S.rows.filter(r => /not contacted/i.test(O(r, F.stage))).map(r => O(r, F.next)), 'Confirm contact and introduce Action+.'),
+    handoff: handoffs.find(o => /awaiting/i.test(o)) || mostCommon(S.rows.map(r => O(r, F.handoff)))
+  };
+}
+
+function datalist(id, values) {
+  return '<datalist id="' + id + '">' + values.map(v => '<option value="' + esc(v) + '">').join('') + '</datalist>';
+}
+
+function addField(key, label, opts) {
+  opts = opts || {};
+  const id = 'n_' + key;
+  let input;
+  if (opts.select) {
+    input = '<select id="' + id + '" data-n="' + key + '">' + opts.select.map(o => '<option' + (o === opts.value ? ' selected' : '') + '>' + esc(o) + '</option>').join('') + '</select>';
+  } else if (opts.area) {
+    input = '<textarea id="' + id + '" data-n="' + key + '" rows="2">' + esc(opts.value || '') + '</textarea>';
+  } else {
+    input = '<input type="' + (opts.type || 'text') + '" id="' + id + '" data-n="' + key + '" value="' + esc(opts.value || '') + '"' +
+      (opts.list ? ' list="' + opts.list + '"' : '') + (opts.required ? ' required' : '') + '>';
+  }
+  return '<div class="fld"><label for="' + id + '">' + esc(label) + '</label>' + input + '</div>';
+}
+
+function renderAdd() {
+  const d = addDefaults();
+  const stageOpts = S.options[F.stage] && S.options[F.stage].length ? S.options[F.stage] : null;
+  const ownerOpts = S.options[F.owner] && S.options[F.owner].length ? S.options[F.owner] : null;
+  $('#panel').innerHTML =
+    '<div class="p-head"><div class="p-head-row"><h2 id="pTitle">Add organization</h2>' +
+      '<button class="close" type="button" data-close aria-label="Close">&times;</button></div>' +
+      '<p class="sub" style="margin:8px 0 0">Adds a row to Outreach and Research with the next Org ID.</p>' +
+    '</div>' +
+    '<div class="p-body">' +
+      datalist('dl_cat', uniq(S.rows.map(r => R(r, RF.category)))) +
+      datalist('dl_city', uniq(S.rows.map(cityOf))) +
+      datalist('dl_comp', uniq(S.rows.map(r => R(r, RF.comp)))) +
+      datalist('dl_pot', uniq(S.rows.map(r => R(r, RF.potential)))) +
+      datalist('dl_owner', uniq(S.rows.map(r => O(r, F.owner)))) +
+      '<h3>Organization</h3>' +
+      addField('name', 'Organization / team', { required: true }) +
+      '<div class="grid2">' + addField('category', 'Category', { list: 'dl_cat' }) + addField('city', 'City', { list: 'dl_city' }) + '</div>' +
+      '<div class="grid2">' + addField('ages', 'Age / grade range') + addField('address', 'Address / venue') + '</div>' +
+      addField('web', 'Website / contact route', { type: 'url' }) +
+      '<h3>Contact</h3>' +
+      addField('contact', 'Public contact') +
+      '<div class="grid2">' + addField('email', 'Contact email', { type: 'email' }) + addField('phone', 'Phone', { type: 'tel' }) + '</div>' +
+      '<h3>Outreach</h3>' +
+      '<div class="grid2">' +
+        addField('stage', 'Outreach stage', stageOpts ? { select: stageOpts, value: d.stage } : { value: d.stage }) +
+        addField('follow', 'Follow-up date', { type: 'date' }) +
+      '</div>' +
+      addField('next', 'Next action', { area: true, value: d.next }) +
+      addField('owner', 'Owner', ownerOpts ? { select: ownerOpts, value: d.owner } : { value: d.owner, list: 'dl_owner' }) +
+      '<h3>Research</h3>' +
+      '<div class="grid2">' + addField('comp', 'Competitor assessment', { list: 'dl_comp' }) + addField('potential', 'Partnership potential', { list: 'dl_pot' }) + '</div>' +
+      addField('notes', 'Notes / gaps', { area: true }) +
+    '</div>' +
+    '<div class="p-foot"><span class="status" id="pStatus"></span>' +
+      '<button class="btn" type="button" data-close>Cancel</button>' +
+      '<button class="btn btn-primary" type="button" data-add' + (S.adding ? ' disabled' : '') + '>' + (S.adding ? 'Adding…' : 'Add organization') + '</button>' +
+    '</div>';
+}
+
+function addValues() {
+  const v = {};
+  document.querySelectorAll('#panel [data-n]').forEach(el => { v[el.getAttribute('data-n')] = el.value.trim(); });
+  return v;
+}
+
+function addHasInput() {
+  const v = addValues();
+  return !!(v.name || v.contact || v.email || v.phone || v.notes);
+}
+
+function openAdd() {
+  if (S.openId && Object.keys(S.draft).length && !confirm('Discard unsaved changes?')) return;
+  S.openId = null; S.mode = 'add'; S.draft = {}; S.hints = {}; S.adding = false;
+  renderAdd();
+  renderList();
+  const p = $('#panel');
+  p.classList.add('on'); p.setAttribute('aria-hidden', 'false');
+  $('#scrim').classList.add('on');
+  setTimeout(() => { const n = $('#n_name'); if (n) n.focus(); }, 50);
+}
+
+async function submitAdd() {
+  if (S.adding) return;
+  const v = addValues();
+  if (!v.name) { toast('Enter the organization name.', true); const n = $('#n_name'); if (n) n.focus(); return; }
+  const dupe = S.rows.find(r => String(O(r, F.org)).trim().toLowerCase() === v.name.toLowerCase());
+  if (dupe) return toast(v.name + ' is already in the list as ' + dupe.orgId + '.', true);
+  const d = addDefaults();
+  const outreach = {
+    'Organization / team': v.name, 'Owner': v.owner, 'Outreach stage': v.stage,
+    'Follow-up date': v.follow, 'Next action': v.next, 'Action complete': false,
+    'Confirmed Action+ customer': false, 'Roster handoff': d.handoff,
+    'Public contact': v.contact, 'Contact email': v.email, 'Phone': v.phone, 'City': v.city
+  };
+  const research = {
+    'Organization / program': v.name, 'Category': v.category, 'City / service area': v.city,
+    'Address / venue': v.address, 'Age / grade range': v.ages, 'Public contact': v.contact,
+    'Public email': v.email, 'Public phone': v.phone, 'Website / contact route': v.web,
+    'Competitor assessment': v.comp, 'Partnership potential': v.potential, 'Notes / gaps': v.notes,
+    'Owner': v.owner, 'Outreach stage': v.stage
+  };
+  S.adding = true;
+  const btn = $('[data-add]'); if (btn) { btn.disabled = true; btn.textContent = 'Adding…'; }
+  try {
+    const data = await api('add', { changes: { outreach, research } });
+    S.adding = false;
+    S.mode = '';
+    applyData(data);
+    $('#syncNote').textContent = 'Synced ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    toast('Added ' + v.name + ' as ' + data.newOrgId);
+    if (data.newOrgId) openPanel(data.newOrgId);
+  } catch (err) {
+    S.adding = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Add organization'; }
+    if (err.code === 'auth') return signOut('The passcode changed. Enter the new one.');
+    toast(err.message, true);
+  }
+}
+
+/* ---------- How it works ---------- */
+function renderGuide() {
+  $('#panel').innerHTML =
+    '<div class="p-head"><div class="p-head-row"><h2 id="pTitle">How it works</h2>' +
+      '<button class="close" type="button" data-close aria-label="Close">&times;</button></div>' +
+      '<p class="sub" style="margin:8px 0 0">Matt owns every lead. Confirm Action+ customers first; enter team rosters only after the sale closes.</p>' +
+    '</div>' +
+    '<div class="p-body guide">' +
+      '<h3>The process</h3>' +
+      '<ol>' +
+        '<li><b>Reach out</b>Open an organization, set its outreach stage, next action and follow-up date, and log each call or email under Activity.</li>' +
+        '<li><b>Close Action+</b>Check Confirmed Action+ customer only once the sale is closed. The site fills in today’s sale date and sets Roster handoff to request the roster.</li>' +
+        '<li><b>Enter the team</b>Use the Roster tracker link. Add a unique Team ID in Teams, then use the same ID for each athlete in Roster to Club.</li>' +
+        '<li><b>Convert to Baseball Club</b>In the roster workbook, enter parent or guardian emails, track outreach and assessments, and check Confirmed club member only after the athlete actually joins.</li>' +
+      '</ol>' +
+      '<h3>Definitions</h3>' +
+      '<dl class="research">' +
+        '<div><dt>Confirmed Action+ customer</dt><dd>The Action+ sale is closed. It’s separate from Baseball Club membership.</dd></div>' +
+        '<div><dt>Action complete</dt><dd>The current next action is done, not necessarily a closed sale. When you set a new next action, the site unchecks it for you.</dd></div>' +
+        '<div><dt>Overdue follow-up</dt><dd>An open action with a follow-up date in the past. Calculated automatically.</dd></div>' +
+        '<div><dt>Awaiting roster</dt><dd>A confirmed customer whose roster hasn’t been handed off yet.</dd></div>' +
+        '<div><dt>Competitors</dt><dd>Organizations whose research assessment is likely direct or likely indirect. Assessments are provisional; Bobby reviews direct competitors before outreach.</dd></div>' +
+      '</dl>' +
+      '<h3>Privacy</h3>' +
+      '<p>Public organization contacts live in this CRM. Private rosters and family emails stay in the separate restricted workbook, shared only with Bobby, Matt and Max. Record email permission and honor Do not contact.</p>' +
+      '<h3>Research</h3>' +
+      '<p>Research keeps the original sources, ages, addresses and competitor rationale. It was checked on October 16, 2026. Recheck public contacts before reaching out.</p>' +
+    '</div>';
+}
+
+function openGuide() {
+  if (S.openId && Object.keys(S.draft).length && !confirm('Discard unsaved changes?')) return;
+  S.openId = null; S.mode = 'guide'; S.draft = {}; S.hints = {};
+  renderGuide();
+  renderList();
+  const p = $('#panel');
+  p.classList.add('on'); p.setAttribute('aria-hidden', 'false');
+  $('#scrim').classList.add('on');
+  setTimeout(() => { const c = $('[data-close]', p); if (c) c.focus(); }, 50);
+}
+
 function openPanel(id) {
   if (S.openId && S.openId !== id && Object.keys(S.draft).length && !confirm('Discard unsaved changes?')) return;
-  S.openId = id; S.draft = {}; S.hints = {}; S.touchedDone = false;
+  S.openId = id; S.mode = 'org'; S.draft = {}; S.hints = {}; S.touchedDone = false;
   renderPanel();
   renderList();
   const p = $('#panel');
@@ -747,8 +1045,9 @@ function openPanel(id) {
 
 function closePanel(force) {
   if (!force && Object.keys(S.draft).length && !confirm('Discard unsaved changes?')) return;
+  if (!force && S.mode === 'add' && addHasInput() && !confirm('Discard this new organization?')) return;
   const lastId = S.openId;
-  S.openId = null; S.draft = {}; S.hints = {};
+  S.openId = null; S.mode = ''; S.draft = {}; S.hints = {};
   const p = $('#panel');
   p.classList.remove('on'); p.setAttribute('aria-hidden', 'true');
   $('#scrim').classList.remove('on');
@@ -873,6 +1172,8 @@ $('#logo').addEventListener('error', function () {
 
 $('#gateForm').addEventListener('submit', e => { e.preventDefault(); signIn($('#passInput').value.trim()); });
 $('#signOutBtn').addEventListener('click', () => signOut());
+$('#guideBtn').addEventListener('click', openGuide);
+$('#addBtn').addEventListener('click', openAdd);
 $('#refreshBtn').addEventListener('click', async () => {
   if (Object.keys(S.draft).length && !confirm('Refreshing discards unsaved changes. Continue?')) return;
   S.draft = {};
@@ -929,10 +1230,12 @@ panel.addEventListener('click', e => {
   if (e.target.closest('[data-close]')) return closePanel();
   if (e.target.closest('[data-cancel]')) { S.draft = {}; S.hints = {}; S.touchedDone = false; return renderPanel(); }
   if (e.target.closest('[data-save]')) return save();
+  if (e.target.closest('[data-log]')) return logActivity();
+  if (e.target.closest('[data-add]')) return submitAdd();
 });
 $('#scrim').addEventListener('click', () => closePanel());
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && S.openId) closePanel();
+  if (e.key === 'Escape' && (S.openId || S.mode)) closePanel();
   if ((e.metaKey || e.ctrlKey) && e.key === 's' && S.openId) { e.preventDefault(); save(); }
 });
 
